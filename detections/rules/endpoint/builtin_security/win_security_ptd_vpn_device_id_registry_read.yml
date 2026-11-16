@@ -1,0 +1,45 @@
+title: VPN/SASE Device Identifier Registry Read Request (SACL)
+id: 530436c5-855e-49ba-982d-af0eba83b469
+status: experimental
+description: |
+    Detects a read request (event 4663) against the registry value that holds the device identifier
+    a transplanted client must match: Zscaler MtGuid (HKLM\SOFTWARE\Zscaler Inc.\Zscaler) or Netskope
+    nsdeviceuid (HKLM\SOFTWARE\NetSkope\Provisioning). Reading it is the "match the device ID" step of
+    the copy route. Needs a QueryValues SACL on these keys (tools/Set-PtdAuditSacl.ps1).
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+author: Ruslan Sayfiev
+date: 2026-11-15
+tags:
+    - attack.discovery
+    - attack.t1012
+    - attack.lateral-movement
+    - attack.t1550
+logsource:
+    product: windows
+    service: security
+    definition: 'Requirements: Audit Registry (Success) and a QueryValues SACL on the listed keys'
+detection:
+    selection:
+        EventID: 4663
+        ObjectType: 'Key'
+        ObjectName|contains:
+            - '\SOFTWARE\Zscaler Inc.\Zscaler'
+            - '\SOFTWARE\WOW6432Node\Zscaler Inc.\Zscaler'
+            - '\SOFTWARE\NetSkope\Provisioning'
+            - '\SOFTWARE\WOW6432Node\NetSkope\Provisioning'
+    filter_main_vendor:
+        ProcessName|startswith:
+            - 'C:\Program Files\Zscaler\'
+            - 'C:\Program Files (x86)\Zscaler\'
+            - 'C:\Program Files\Netskope\'
+            - 'C:\Program Files (x86)\Netskope\'
+    filter_main_msiexec:
+        ProcessName:
+            - 'C:\Windows\System32\msiexec.exe'
+            - 'C:\Windows\SysWOW64\msiexec.exe'
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Software-inventory agents (SCCM, Intune, Tanium) that walk HKLM\SOFTWARE
+    - Vendor support tools started from a temporary directory
+level: medium

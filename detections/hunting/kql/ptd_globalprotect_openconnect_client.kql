@@ -1,0 +1,40 @@
+// Pass-the-Device · GlobalProtect reached with OpenConnect · server-side signal
+//
+// OpenConnect's GP mode sends the bare "PAN GlobalProtect" User-Agent, so the client cannot be told
+// apart at the HTTP layer. It CAN be told apart by what the gateway records about the client:
+//
+//   signal 1  gateway-auth with GlobalProtectClientVersion "0.0.0" or "0.0.-1"
+//             (OpenConnect does not report a real GP client version at gateway auth)
+//   signal 2  HIPMATCH with an empty endpoint serial number
+//             (a reconstructed HIP report carries no device serial)
+//
+// Both were documented by rotarydrone (GlobalUnProtect countermeasures, 2024) as Sigma rules in
+// logsource globalprotect/vpn. This is a Sentinel KQL port for PAN-OS GlobalProtect logs, kept here
+// so the signal is usable without a GP-category pipeline. Credit: rotarydrone. Verify the exact
+// version string and field names against your PAN-OS release before alerting; newer OpenConnect
+// builds send app-version 6.3.0-33 and clientVer 4100, so the 0.0.x value is build- and stage-
+// dependent, not guaranteed.
+//
+// Rename PaloAltoGlobalProtect_CL / column names to match your ingestion (CEF, LSS, or API).
+let lookback = 7d;
+let gp = PaloAltoGlobalProtect_CL
+    | where TimeGenerated > ago(lookback);
+let auth_badver = gp
+    | where column_ifexists("Stage_s", column_ifexists("stage_s", "")) =~ "gateway-auth"
+         or column_ifexists("EventID_s", "") =~ "gateway-auth"
+    | extend GpClientVersion = column_ifexists("GlobalProtectClientVersion_s", column_ifexists("client_version_s", ""))
+    | where GpClientVersion startswith "0.0."
+    | extend Signal = "gateway-auth client version 0.0.x (OpenConnect)";
+let hip_noserial = gp
+    | where column_ifexists("Subtype_s", column_ifexists("subtype_s", "")) =~ "hipmatch"
+    | extend Serial = column_ifexists("EndpointSerialNumber_s", column_ifexists("serial_s", ""))
+    | where isempty(Serial)
+    | extend Signal = "HIPMATCH with empty endpoint serial (OpenConnect)";
+union auth_badver, hip_noserial
+| extend User = column_ifexists("SourceUser_s", column_ifexists("source_user_s", "")),
+         SrcPublicIp = column_ifexists("PublicIPv4_s", column_ifexists("public_ip_s", "")),
+         DeviceName = column_ifexists("EndpointDeviceName_s", ""),
+         OsType = column_ifexists("EndpointOSType_s", "")
+| project TimeGenerated, Signal, User, SrcPublicIp, DeviceName, OsType,
+          GpClientVersion = column_ifexists("GpClientVersion", "")
+| order by TimeGenerated desc

@@ -1,0 +1,62 @@
+title: Certificate Private Key File Access By Uncommon Application
+id: 4eb02ca1-8fe7-405c-bc3d-fce4942e029c
+status: experimental
+description: |
+    Detects a process other than LSASS, Defender or a VPN/SASE client accessing the files that hold
+    software-backed certificate private keys:
+      user CAPI     %APPDATA%\Microsoft\Crypto\RSA\<SID>\
+      user CNG      %APPDATA%\Microsoft\Crypto\Keys\
+      machine CAPI  %ProgramData%\Microsoft\Crypto\RSA\MachineKeys\
+      machine CNG   %ProgramData%\Microsoft\Crypto\Keys\ and \SystemKeys\
+    In Pass-the-Device, a VPN client certificate with a software key (Cisco, Palo Alto) can be rebuilt
+    on a second machine from these files plus the DPAPI master keys, with no export event on the host.
+    Pair it with the DPAPI master-key rules: both reads from one process is the strong form.
+    TPM-backed keys (Microsoft Platform Crypto Provider) are not stored here and cannot be copied this way.
+    For the Security-log (event 4663 + SACL) variant see
+    ../builtin_security/win_security_ptd_private_key_file_read.yml.
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+    - https://specterops.io/blog/2021/06/17/certified-pre-owned/
+    - https://learn.microsoft.com/en-us/windows/win32/seccng/key-storage-and-retrieval
+author: Ruslan Sayfiev
+date: 2026-11-16
+tags:
+    - attack.credential-access
+    - attack.t1552.004
+    - attack.t1649
+logsource:
+    category: file_access
+    product: windows
+    definition: 'Requirements: Microsoft-Windows-Kernel-File ETW provider'
+detection:
+    selection:
+        FileName|contains:
+            - '\Microsoft\Crypto\RSA\S-1-5-'
+            - '\AppData\Roaming\Microsoft\Crypto\Keys\'
+            - '\Microsoft\Crypto\RSA\MachineKeys\'
+            - '\ProgramData\Microsoft\Crypto\Keys\'
+            - '\ProgramData\Microsoft\Crypto\SystemKeys\'
+    filter_main_lsass:
+        # CNG key isolation: private-key operations for CNG keys run inside LSASS
+        Image: 'C:\Windows\System32\lsass.exe'
+    filter_main_vendor:
+        # VPN/SASE clients use their own client-certificate keys
+        Image|startswith:
+            - 'C:\Program Files\Palo Alto Networks\'
+            - 'C:\Program Files (x86)\Palo Alto Networks\'
+            - 'C:\Program Files\Zscaler\'
+            - 'C:\Program Files (x86)\Zscaler\'
+            - 'C:\Program Files\Netskope\'
+            - 'C:\Program Files (x86)\Netskope\'
+            - 'C:\Program Files\Cisco\'
+            - 'C:\Program Files (x86)\Cisco\'
+    filter_optional_defender:
+        Image|startswith: 'C:\ProgramData\Microsoft\Windows Defender\Platform\'
+        Image|endswith: '\MsMpEng.exe'
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Applications using a legacy CAPI key in-process for client-certificate auth or S/MIME (browsers, Office, Teams); baseline and exclude exact images
+    - Certificate enrollment and renewal (certreq.exe, certutil.exe, taskhostw.exe and svchost.exe-hosted autoenrollment)
+    - Roaming profiles, FSLogix, USMT or Credential Roaming moving the profile
+    - File-level backup agents
+level: medium

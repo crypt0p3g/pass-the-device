@@ -1,0 +1,42 @@
+// Pass-the-Device · endpoint · client-state, device-ID, private-key and DPAPI master-key reads
+// Sentinel SecurityEvent (AMA/MMA), EventID 4663. Same logic as the four Sigma rules in
+// ../../rules/endpoint/builtin_security/. Requires the SACLs from ../../tools/Set-PtdAuditSacl.ps1.
+// Status: draft, not yet run against real telemetry. Baseline readers for a week before alerting.
+let lookback = 1d;
+let vendorDirs = dynamic([
+    @"c:\program files\palo alto networks\", @"c:\program files (x86)\palo alto networks\",
+    @"c:\program files\zscaler\",            @"c:\program files (x86)\zscaler\",
+    @"c:\program files\netskope\",           @"c:\program files (x86)\netskope\",
+    @"c:\program files\cisco\",              @"c:\program files (x86)\cisco\"]);
+SecurityEvent
+| where TimeGenerated > ago(lookback)
+| where EventID == 4663
+| extend Obj = tolower(ObjectName), Proc = tolower(ProcessName)
+| extend Target = case(
+    ObjectType == "File" and (Obj contains @"\palo alto networks\globalprotect\panportalcfg_" or Obj contains @"\palo alto networks\globalprotect\panpuac_" or Obj contains @"\palo alto networks\globalprotect\panpcd_"), "GlobalProtect portal/auth state",
+    ObjectType == "File" and (Obj contains @"\palo alto networks\globalprotect\hippolicy.dat" or Obj contains @"\palo alto networks\globalprotect\hip_" or Obj contains @"\palo alto networks\globalprotect\pan_gp_hrpt.xml" or Obj contains @"\palo alto networks\globalprotect\pangphip.log"), "GlobalProtect HIP state",
+    ObjectType == "File" and Obj contains @"\programdata\zscaler\log_" and Obj endswith ".dat", "Zscaler protected state",
+    ObjectType == "File" and Obj contains @"\netskope\stagent\data\", "Netskope client state",
+    ObjectType == "File" and (Obj contains @"\cisco anyconnect secure mobility client\preferences" or Obj contains @"\cisco secure client\vpn\preferences"
+        or Obj contains @"\cisco anyconnect secure mobility client\profile\" or Obj contains @"\cisco secure client\vpn\profile\"
+        or Obj contains @"\cisco hostscan\log\cscan" or Obj contains @"\cisco secure firewall posture\log\cscan"), "Cisco client preferences/profile/posture",
+    ObjectType == "Key" and (Obj contains @"\software\zscaler inc.\zscaler" or Obj contains @"\software\wow6432node\zscaler inc.\zscaler"), "Zscaler MtGuid key",
+    ObjectType == "Key" and (Obj contains @"\software\netskope\provisioning" or Obj contains @"\software\wow6432node\netskope\provisioning"), "Netskope nsdeviceuid key",
+    ObjectType == "File" and (Obj contains @"\microsoft\crypto\rsa\s-1-5-" or Obj contains @"\appdata\roaming\microsoft\crypto\keys\"
+        or Obj contains @"\microsoft\crypto\rsa\machinekeys\" or Obj contains @"\programdata\microsoft\crypto\keys\"
+        or Obj contains @"\programdata\microsoft\crypto\systemkeys\"), "Certificate private key",
+    ObjectType == "File" and (Obj contains @"\appdata\roaming\microsoft\protect\s-1-" or Obj contains @"\windows\system32\microsoft\protect\s-1-5-18\"), "DPAPI master key",
+    "")
+| where isnotempty(Target)
+// vendor binaries read their own state
+| where not(Target != "DPAPI master key" and Proc has_any (vendorDirs))
+// LSASS reads master keys during normal DPAPI use
+| where not(Target in ("DPAPI master key", "Certificate private key") and Proc == @"c:\windows\system32\lsass.exe")
+| where not(Proc startswith @"c:\programdata\microsoft\windows defender\platform\" and Proc endswith @"\msmpeng.exe")
+| where not(ObjectType == "Key" and Proc in (@"c:\windows\system32\msiexec.exe", @"c:\windows\syswow64\msiexec.exe"))
+| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated), Reads = count(),
+            Objects = make_set(ObjectName, 20), Targets = make_set(Target)
+    by Computer, SubjectUserName, SubjectUserSid, ProcessName
+// Several different trust stores read by one process is the strongest form of this signal
+| extend TargetCount = array_length(Targets)
+| order by TargetCount desc, Reads desc

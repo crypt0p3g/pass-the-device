@@ -1,0 +1,35 @@
+title: OpenConnect Default User-Agent Against AnyConnect-Protocol Gateway
+id: 60e257ae-48ed-4bd3-9ce1-831002199214
+status: experimental
+description: |
+    Detects the stock OpenConnect User-Agent in the web logs of whatever terminates or fronts an
+    AnyConnect-protocol VPN portal (reverse proxy, WAF, load balancer, ocserv front end).
+    OpenConnect builds the default as "<base> <version>" (main.c):
+      v9.20 and later: "AnyConnect-compatible OpenConnect VPN Agent v9.xx"
+      before v9.20:    "Open AnyConnect VPN Agent v<version>"
+    Only the default is caught; the operator can override it with --useragent.
+    Not useful for GlobalProtect: OpenConnect's GP mode sends the bare "PAN GlobalProtect", the same
+    value the official client sends, so GP abuse is caught by the host-id / MAC literals in
+    hunting/kql/ptd_openconnect_default_literals.kql instead.
+references:
+    - https://gitlab.com/openconnect/openconnect/-/blob/master/main.c
+    - https://github.com/crypt0p3g/pass-the-device
+author: Ruslan Sayfiev
+date: 2026-11-15
+tags:
+    - attack.initial-access
+    - attack.persistence
+    - attack.t1133
+logsource:
+    category: webserver
+    definition: 'Requirements: web logs from the device in front of an AnyConnect / Cisco Secure Client gateway'
+detection:
+    selection:
+        cs-user-agent|startswith:
+            - 'AnyConnect-compatible OpenConnect VPN Agent'
+            - 'Open AnyConnect VPN Agent'
+    condition: selection
+falsepositives:
+    - Linux or macOS users permitted to use OpenConnect (list them and exclude by user or source IP)
+    - Monitoring probes built on OpenConnect
+level: medium

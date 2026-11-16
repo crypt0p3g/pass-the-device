@@ -1,0 +1,58 @@
+title: Certificate Private Key File Read Request By Uncommon Process (SACL)
+id: 70752599-9d58-4385-b7e4-bbe0724537c0
+status: experimental
+description: |
+    Detects a read request (event 4663) against the files that hold software-backed certificate
+    private keys (user and machine CAPI/CNG key stores) by a process other than LSASS, Defender or a
+    VPN/SASE client. Copying these files together with the DPAPI master keys lets a client certificate
+    be rebuilt on a second machine without an export event.
+    Security-log variant of ../file_access/file_access_win_ptd_private_key_file_read.yml.
+    Needs a read SACL on the key folders (tools/Set-PtdAuditSacl.ps1, unless -SkipCertKeys).
+related:
+    - id: 4eb02ca1-8fe7-405c-bc3d-fce4942e029c
+      type: derived
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+    - https://specterops.io/blog/2021/06/17/certified-pre-owned/
+author: Ruslan Sayfiev
+date: 2026-11-16
+tags:
+    - attack.credential-access
+    - attack.t1552.004
+    - attack.t1649
+logsource:
+    product: windows
+    service: security
+    definition: 'Requirements: Audit File System (Success) and a read SACL on the Crypto key folders'
+detection:
+    selection:
+        EventID: 4663
+        ObjectType: 'File'
+        ObjectName|contains:
+            - '\Microsoft\Crypto\RSA\S-1-5-'
+            - '\AppData\Roaming\Microsoft\Crypto\Keys\'
+            - '\Microsoft\Crypto\RSA\MachineKeys\'
+            - '\ProgramData\Microsoft\Crypto\Keys\'
+            - '\ProgramData\Microsoft\Crypto\SystemKeys\'
+    filter_main_lsass:
+        ProcessName: 'C:\Windows\System32\lsass.exe'
+    filter_main_vendor:
+        ProcessName|startswith:
+            - 'C:\Program Files\Palo Alto Networks\'
+            - 'C:\Program Files (x86)\Palo Alto Networks\'
+            - 'C:\Program Files\Zscaler\'
+            - 'C:\Program Files (x86)\Zscaler\'
+            - 'C:\Program Files\Netskope\'
+            - 'C:\Program Files (x86)\Netskope\'
+            - 'C:\Program Files\Cisco\'
+            - 'C:\Program Files (x86)\Cisco\'
+    filter_optional_defender:
+        ProcessName|startswith: 'C:\ProgramData\Microsoft\Windows Defender\Platform\'
+        ProcessName|endswith: '\MsMpEng.exe'
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Applications using a legacy CAPI key in-process for client-certificate auth or S/MIME (browsers, Office, Teams); baseline and exclude exact images
+    - Certificate enrollment and renewal (certreq.exe, certutil.exe, taskhostw.exe and svchost.exe-hosted autoenrollment)
+    - Roaming profiles, FSLogix, USMT or Credential Roaming moving the profile
+    - File-level backup agents
+level: medium

@@ -1,0 +1,81 @@
+title: VPN/SASE Client Trust State Read Request (SACL)
+id: 5a03596a-bd6a-4856-a9c9-08fc4a29b216
+status: experimental
+description: |
+    Detects a read request (event 4663) against the VPN/SASE client state that carries remote-access
+    trust, by a process outside the vendor's install directory. This is the "copy existing state"
+    route of Pass-the-Device.
+    Covered state: GlobalProtect PanPortalCfg/PanPUAC/PanPCD and HIP state (HipPolicy.dat,
+    HIP_*_Report_*.dat, pan_gp_hrpt.xml, PanGPHip.log), Zscaler log_<SID>\*.dat, Netskope stagent\data,
+    Cisco Secure Client / AnyConnect preferences, VPN profiles and the HostScan/posture cscan.log.
+    Security-log variant of ../file_access/file_access_win_ptd_vpn_client_state_read.yml; use whichever
+    telemetry you ingest. Needs a read SACL on these paths (tools/Set-PtdAuditSacl.ps1).
+    GlobalProtect paths follow rotarydrone's GlobalUnProtect work.
+related:
+    - id: 20ee8686-33cc-4fc5-87f6-0e0e4a515feb
+      type: derived
+    - id: 1b5fc48c-5e17-4b3a-9575-242ccfea7f16
+      type: similar
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+    - https://github.com/rotarydrone/GlobalUnProtect
+author: Ruslan Sayfiev
+date: 2026-11-15
+tags:
+    - attack.credential-access
+    - attack.t1552.004
+    - attack.t1555
+    - attack.lateral-movement
+    - attack.t1550
+logsource:
+    product: windows
+    service: security
+    definition: 'Requirements: Audit File System (Success) and a read SACL (List folder / read data) on the listed client-state paths'
+detection:
+    selection_event:
+        EventID: 4663
+        ObjectType: 'File'
+    selection_paloalto:
+        ObjectName|contains:
+            - '\Palo Alto Networks\GlobalProtect\PanPortalCfg_'
+            - '\Palo Alto Networks\GlobalProtect\PanPUAC_'
+            - '\Palo Alto Networks\GlobalProtect\PanPCD_'
+            - '\Palo Alto Networks\GlobalProtect\HipPolicy.dat'
+            - '\Palo Alto Networks\GlobalProtect\HIP_'
+            - '\Palo Alto Networks\GlobalProtect\pan_gp_hrpt.xml'
+            - '\Palo Alto Networks\GlobalProtect\PanGPHip.log'
+    selection_zscaler:
+        ObjectName|contains: '\ProgramData\Zscaler\log_'
+        ObjectName|endswith: '.dat'
+    selection_netskope:
+        ObjectName|contains: '\Netskope\stagent\data\'
+    selection_cisco:
+        ObjectName|contains:
+            # user and global preferences (certificate thumbprint, default gateway)
+            - '\Cisco\Cisco AnyConnect Secure Mobility Client\preferences'
+            - '\Cisco\Cisco Secure Client\VPN\preferences'
+            # VPN profiles in ProgramData (gateway hosts, authentication method)
+            - '\Cisco\Cisco AnyConnect Secure Mobility Client\Profile\'
+            - '\Cisco\Cisco Secure Client\VPN\Profile\'
+            # HostScan / Secure Firewall Posture log (the posture values the client reported)
+            - '\Cisco HostScan\log\cscan'
+            - '\Cisco Secure Firewall Posture\log\cscan'
+    filter_main_vendor:
+        ProcessName|startswith:
+            - 'C:\Program Files\Palo Alto Networks\'
+            - 'C:\Program Files (x86)\Palo Alto Networks\'
+            - 'C:\Program Files\Zscaler\'
+            - 'C:\Program Files (x86)\Zscaler\'
+            - 'C:\Program Files\Netskope\'
+            - 'C:\Program Files (x86)\Netskope\'
+            - 'C:\Program Files\Cisco\'
+            - 'C:\Program Files (x86)\Cisco\'
+    filter_optional_defender:
+        ProcessName|startswith: 'C:\ProgramData\Microsoft\Windows Defender\Platform\'
+        ProcessName|endswith: '\MsMpEng.exe'
+    condition: selection_event and (selection_paloalto or selection_zscaler or selection_netskope or selection_cisco) and not 1 of filter_*
+falsepositives:
+    - Vendor updaters or support/diagnostic collectors installed outside the paths above (baseline a week of readers per product before enabling)
+    - Backup, DLP or AV scanners that open files for read
+    - Roaming-profile or FSLogix synchronisation of AppData
+level: high

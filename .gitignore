@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+env/
+venv/
+
+# OS
+.DS_Store
+
+# Tool output / secrets - never commit
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+certs/
+catalog-output/
+*.json.out
+nsbranding.json
+cert.crt
+cert.key
+ca.key
+gp_auth_output/
+gp_recon_output/
+userauthcookie.dat
+auth.json
+hostinfo.txt
+hostinfo.json
+cookies*.txt
+prt*.txt
+required_csc*.xml
+required_hip*.xml
+profile*.json
+*-openconnect.sh
+*-openconnect.conf
+*-fixture.json
+*.jsonl
+npa_policy_*.txt
+
+# Detections test output
+*.evtx

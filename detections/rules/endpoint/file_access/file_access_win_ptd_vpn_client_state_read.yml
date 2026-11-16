@@ -1,0 +1,91 @@
+title: VPN/SASE Client Trust State Access By Uncommon Application
+id: 20ee8686-33cc-4fc5-87f6-0e0e4a515feb
+status: experimental
+description: |
+    Detects a process outside the VPN/SASE vendor's install directory accessing the client state
+    that carries remote-access trust. Copying this state to a second machine is the "copy existing
+    state" route of Pass-the-Device.
+    Covered state:
+      GlobalProtect  PanPortalCfg_*.dat / PanPUAC_*.dat (client cert, portal-userauthcookie);
+                     HIP state: HipPolicy.dat, HIP_*_Report_*.dat, pan_gp_hrpt.xml (the last HIP
+                     report, plaintext XML: a ready template for replaying HIP), PanGPHip.log
+      Zscaler        ProgramData\Zscaler\log_<SID>\*.dat protected state
+      Netskope       Roaming\Netskope\stagent\data (NPA cert/key, nsdeviceid.json)
+      Cisco          Secure Client / AnyConnect preferences*.xml (cert thumbprint, gateway),
+                     VPN profiles (ProgramData ...\Profile\*.xml), HostScan/posture cscan.log
+    This variant uses the Microsoft-Windows-Kernel-File ETW provider (Sigma category file_access),
+    so it needs no SACL. For the Security-log (event 4663 + SACL) variant see
+    ../builtin_security/win_security_ptd_vpn_client_state_read.yml.
+    System32 and SysWOW64 are deliberately not filtered: cmd.exe, powershell.exe, robocopy.exe and
+    other built-in binaries are the likeliest readers during collection. Add exclusions for exact
+    images only, after baselining.
+    Generalises rotarydrone's GlobalProtect-only rule (1b5fc48c-5e17-4b3a-9575-242ccfea7f16) to the
+    four products in the talk; the GlobalProtect paths and HipPolicy.dat come from that work and the
+    GlobalUnProtect tool. Deduplicate if you already run the original.
+related:
+    - id: 1b5fc48c-5e17-4b3a-9575-242ccfea7f16
+      type: derived
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+    - https://github.com/rotarydrone/GlobalUnProtect
+    - https://rotarydrone.medium.com/4a1d8fc7773e
+author: Ruslan Sayfiev
+date: 2026-11-15
+tags:
+    - attack.credential-access
+    - attack.t1552.004
+    - attack.t1555
+    - attack.lateral-movement
+    - attack.t1550
+logsource:
+    category: file_access
+    product: windows
+    definition: 'Requirements: Microsoft-Windows-Kernel-File ETW provider'
+detection:
+    selection_paloalto:
+        FileName|contains:
+            - '\Palo Alto Networks\GlobalProtect\PanPortalCfg_'
+            - '\Palo Alto Networks\GlobalProtect\PanPUAC_'
+            - '\Palo Alto Networks\GlobalProtect\PanPCD_'
+            - '\Palo Alto Networks\GlobalProtect\HipPolicy.dat'
+            - '\Palo Alto Networks\GlobalProtect\HIP_'
+            - '\Palo Alto Networks\GlobalProtect\pan_gp_hrpt.xml'
+            - '\Palo Alto Networks\GlobalProtect\PanGPHip.log'
+    selection_zscaler:
+        FileName|contains: '\ProgramData\Zscaler\log_'
+        FileName|endswith: '.dat'
+    selection_netskope:
+        FileName|contains: '\Netskope\stagent\data\'
+    selection_cisco:
+        FileName|contains:
+            # user and global preferences (certificate thumbprint, default gateway)
+            - '\Cisco\Cisco AnyConnect Secure Mobility Client\preferences'
+            - '\Cisco\Cisco Secure Client\VPN\preferences'
+            # VPN profiles in ProgramData (gateway hosts, authentication method)
+            - '\Cisco\Cisco AnyConnect Secure Mobility Client\Profile\'
+            - '\Cisco\Cisco Secure Client\VPN\Profile\'
+            # HostScan / Secure Firewall Posture log (the posture values the client reported)
+            - '\Cisco HostScan\log\cscan'
+            - '\Cisco Secure Firewall Posture\log\cscan'
+    filter_main_vendor:
+        Image|startswith:
+            - 'C:\Program Files\Palo Alto Networks\'
+            - 'C:\Program Files (x86)\Palo Alto Networks\'
+            - 'C:\Program Files\Zscaler\'
+            - 'C:\Program Files (x86)\Zscaler\'
+            - 'C:\Program Files\Netskope\'
+            - 'C:\Program Files (x86)\Netskope\'
+            - 'C:\Program Files\Cisco\'
+            - 'C:\Program Files (x86)\Cisco\'
+    filter_optional_defender:
+        Image|startswith: 'C:\ProgramData\Microsoft\Windows Defender\Platform\'
+        Image|endswith: '\MsMpEng.exe'
+    filter_optional_explorer:
+        Image: 'C:\Windows\explorer.exe'
+    condition: 1 of selection_* and not 1 of filter_*
+falsepositives:
+    - Vendor updaters or support/diagnostic collectors installed outside the paths above (baseline a week of readers per product before enabling)
+    - Backup, DLP or AV software opening the files
+    - Roaming-profile or FSLogix synchronisation of AppData
+    - Users browsing the folders in Explorer (filtered as optional; remove that filter if you want Explorer-based copies too)
+level: high

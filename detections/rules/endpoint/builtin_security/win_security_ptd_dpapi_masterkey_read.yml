@@ -1,0 +1,40 @@
+title: DPAPI Master Key Read Request By Process Other Than LSASS (SACL)
+id: 92342f65-8cfb-4a5c-848b-d14582d4844e
+status: experimental
+description: |
+    Detects a read request (event 4663) against DPAPI master key files under the user Protect store
+    (%APPDATA%\Microsoft\Protect\S-1-5-21-*) or the SYSTEM store (\Microsoft\Protect\S-1-5-18\) by a
+    process other than lsass.exe. Normal DPAPI decryption happens inside LSASS; another reader usually
+    means the master keys are being collected for offline decryption of VPN/SASE client state, which
+    leaves no live decrypt event on the host.
+    Security-log variant of ../file_access/file_access_win_ptd_dpapi_masterkey_read.yml.
+    Needs a read SACL on the Protect folders (tools/Set-PtdAuditSacl.ps1).
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+    - https://github.com/crypt0p3g/dpapi-toolkit
+author: Ruslan Sayfiev
+date: 2026-11-15
+tags:
+    - attack.credential-access
+    - attack.t1555.004
+logsource:
+    product: windows
+    service: security
+    definition: 'Requirements: Audit File System (Success) and a read SACL on the DPAPI Protect folders'
+detection:
+    selection:
+        EventID: 4663
+        ObjectType: 'File'
+        ObjectName|contains:
+            - '\AppData\Roaming\Microsoft\Protect\S-1-5-21-'
+            - '\Windows\System32\Microsoft\Protect\S-1-5-18\'
+    filter_main_lsass:
+        ProcessName: 'C:\Windows\System32\lsass.exe'
+    filter_optional_defender:
+        ProcessName|startswith: 'C:\ProgramData\Microsoft\Windows Defender\Platform\'
+        ProcessName|endswith: '\MsMpEng.exe'
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Roaming profiles, FSLogix, USMT or Credential Roaming moving the profile
+    - File-level backup agents
+level: high

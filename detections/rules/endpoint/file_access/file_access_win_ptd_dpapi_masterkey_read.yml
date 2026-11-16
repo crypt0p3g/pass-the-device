@@ -1,0 +1,42 @@
+title: DPAPI Master Key Access By Uncommon Application During Remote-Access Trust Collection
+id: be66a2b3-ab6d-443f-b6a9-1222146a75b7
+status: experimental
+description: |
+    Detects an uncommon process accessing DPAPI master keys under the user Protect store
+    (%APPDATA%\Microsoft\Protect\S-1-5-21-*) or the SYSTEM store (\Microsoft\Protect\S-1-5-18\).
+    In Pass-the-Device the attacker collects the master keys to decrypt VPN/SASE client state
+    (GlobalProtect PanPortalCfg, Zscaler protected state, Netskope stagent) away from the source
+    host, which produces no live decrypt event on the source.
+    This overlaps with SigmaHQ rule 46612ae6-86be-4802-bc07-39b59feb1309, which excludes everything
+    under Program Files, System32 and SysWOW64. This variant excludes only lsass.exe (the normal
+    reader) and Defender, so built-in binaries such as cmd.exe, powershell.exe and robocopy.exe
+    copying the keys stay visible. It is noisier: baseline before alerting. Deduplicate if you run both.
+references:
+    - https://github.com/crypt0p3g/pass-the-device
+    - https://github.com/crypt0p3g/dpapi-toolkit
+    - http://blog.harmj0y.net/redteaming/operational-guidance-for-offensive-user-dpapi-abuse/
+author: Ruslan Sayfiev
+date: 2026-11-15
+tags:
+    - attack.credential-access
+    - attack.t1555.004
+logsource:
+    category: file_access
+    product: windows
+    definition: 'Requirements: Microsoft-Windows-Kernel-File ETW provider'
+detection:
+    selection:
+        FileName|contains:
+            - '\Microsoft\Protect\S-1-5-18\'
+            - '\Microsoft\Protect\S-1-5-21-'
+    filter_main_lsass:
+        Image: 'C:\Windows\System32\lsass.exe'
+    filter_optional_defender:
+        Image|startswith: 'C:\ProgramData\Microsoft\Windows Defender\Platform\'
+        Image|endswith: '\MsMpEng.exe'
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Roaming profiles, FSLogix, USMT or Credential Roaming moving the profile (svchost.exe-hosted profile and roaming services)
+    - File-level backup agents
+    - Software installed under Program Files that reads master keys legitimately (baseline, then exclude exact images)
+level: medium

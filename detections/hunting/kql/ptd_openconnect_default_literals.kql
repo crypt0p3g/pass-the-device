@@ -1,0 +1,46 @@
+// Pass-the-Device · OpenConnect default artifacts · schema-agnostic sweep
+// Finds literals that stock OpenConnect and its bundled trojans/ scripts send unless the operator
+// changes them. Values verified against upstream openconnect master (v9.21-25-g70d1e79, 2026-07-19):
+//
+//   literal                                       source in openconnect                      confidence
+//   "AnyConnect-compatible OpenConnect VPN Agent"  main.c, default UA since v9.20               high
+//   "Open AnyConnect VPN Agent"                    default UA before v9.20                      high
+//   "deadbeef-dead-beef-dead-beefdeadbeef"         trojans/hipreport.sh HOST_ID; the Windows    high
+//                                                  NIC GUID {DEADBEEF-...} is the same string
+//   "01-02-03-00-00-01"                            trojans/hipreport.sh MAC address             high
+//   "PANGP Virtual Ethernet Adapter #2"            trojans/hipreport.sh NIC description         medium
+//   "FFFF.FFFF.FFFF"                               trojans/csd-post.sh endpoint.device.MAC      high
+//   "3.1.03103"                                    trojans/csd-post.sh protection_version       medium
+//   "IPTablesFW"                                   trojans/csd-post.sh firewall entry           medium
+//   "Linux Fedora 32"                              trojans/hipreport.sh Linux OS string         medium
+//
+// Where these show up:
+//   Cisco ASA   722055 "Client Type: <User-Agent>"; 734003 DAP session attributes carry the
+//               csd-post.sh values, but only with DAP logging at debugging level (7).
+//   PAN-OS      GLOBALPROTECT and HIP Match logs (host ID, MAC, OS) after a default HIP report.
+//   Cisco SSE   remote-access VPN export (client version / OS fields), via your custom table.
+//
+// Edit the custom tables in the `union` to the ones your VPN/SASE logs land in. Missing tables are skipped.
+// Status: draft; literals verified in source, log placement not yet verified on every product.
+let lookback = 7d;
+let ocRegex = @"(?i)(AnyConnect-compatible OpenConnect VPN Agent|Open AnyConnect VPN Agent|deadbeef-dead-beef-dead-beefdeadbeef|01-02-03-00-00-01|PANGP Virtual Ethernet Adapter #2|FFFF\.FFFF\.FFFF|3\.1\.03103|IPTablesFW|Linux Fedora 32)";
+union isfuzzy=true
+    (CommonSecurityLog
+        | where TimeGenerated > ago(lookback)
+        | where DeviceVendor in~ ("Cisco", "Palo Alto Networks")),
+    (Syslog
+        | where TimeGenerated > ago(lookback)
+        | where SyslogMessage has_any ("%ASA-", "GLOBALPROTECT", "HIPMATCH")),
+    // custom VPN/SASE tables (rename to yours)
+    (PaloAltoGlobalProtect_CL | where TimeGenerated > ago(lookback)),
+    (CiscoSSE_RAVPN_CL   | where TimeGenerated > ago(lookback))
+| extend Raw = tostring(pack_all())
+| where Raw matches regex ocRegex
+| extend Artifact = extract(ocRegex, 1, Raw)
+| extend Confidence = iff(Artifact in~ ("PANGP Virtual Ethernet Adapter #2", "3.1.03103", "IPTablesFW", "Linux Fedora 32"), "medium", "high")
+| extend Source = coalesce(column_ifexists("DeviceProduct", ""), column_ifexists("Computer", ""), Type)
+| project TimeGenerated, Type, Source, Artifact, Confidence,
+          SrcIp = coalesce(column_ifexists("SourceIP", ""), column_ifexists("HostIP", "")),
+          User  = column_ifexists("SourceUserName", ""),
+          Raw
+| order by TimeGenerated desc

@@ -1,0 +1,62 @@
+// Pass-the-Device · endpoint · live DPAPI decryption by an uncommon process
+// Microsoft-Windows-Crypto-DPAPI/Debug event 16385 (DPAPIDefInformationEvent), OperationType SPCryptUnprotect,
+// joined to Security 4688 to name the calling process.
+//
+// Why: the copy route decrypts VPN/SASE client state on the source host with CryptUnprotectData
+// (user scope for GlobalProtect / Netskope, the SYSTEM account for newer Zscaler clients). That call is
+// visible here. Offline decryption (master keys copied elsewhere) is NOT: pair this with the master-key
+// and private-key read rules.
+//
+// Prerequisites
+//   1. The Debug channel is off by default. Enable it on pilot hosts:
+//        wevtutil sl Microsoft-Windows-Crypto-DPAPI/Debug /e:true
+//   2. Collect it, e.g. AMA data collection rule (lands in the Event table):
+//        Microsoft-Windows-Crypto-DPAPI/Debug!*[System[(EventID=16385)]]
+//   3. Process creation auditing (4688) to resolve CallerProcessID to an image, or join to your EDR's
+//      process events instead.
+//   Volume: every DPAPI decrypt on the host (browsers, Office, Teams...). Pilot first, filter at collection.
+//
+// Fields (from the event manifest): OperationType, DataDescription, MasterKeyGUID, Flags, ProtectionFlags,
+// ReturnValue, CallerProcessStartKey, CallerProcessID (decimal), CallerProcessCreationTime, PlainTextDataSize.
+// 4688 NewProcessId is hex, so the join converts. PIDs are reused: the join takes the latest 4688 before the event.
+//
+// Status: hunting query, draft, not yet run against real telemetry. Use it to scope an incident or to
+// baseline callers, not as an alert as-is.
+let lookback = 1d;
+let vendorDirs = dynamic([
+    @"c:\program files\palo alto networks\", @"c:\program files (x86)\palo alto networks\",
+    @"c:\program files\zscaler\",            @"c:\program files (x86)\zscaler\",
+    @"c:\program files\netskope\",           @"c:\program files (x86)\netskope\",
+    @"c:\program files\cisco\",              @"c:\program files (x86)\cisco\"]);
+let userWritable = dynamic([@"\appdata\", @"\temp\", @"\downloads\", @"\users\public\", @"c:\programdata\", @"c:\perflogs\"]);
+let unprotect = Event
+    | where TimeGenerated > ago(lookback)
+    | where EventLog == "Microsoft-Windows-Crypto-DPAPI/Debug" and EventID == 16385
+    | extend Data = parse_xml(EventData).DataItem.EventData.Data
+    | mv-apply d = Data on (summarize Fields = make_bag(bag_pack(tostring(d["@Name"]), tostring(d["#text"]))))
+    | where tostring(Fields.OperationType) == "SPCryptUnprotect"
+    | extend CallerPidHex = strcat("0x", tolower(tohex(tolong(Fields.CallerProcessID))))
+    | project UnprotectTime = TimeGenerated, Computer, CallerPidHex,
+              DataDescription = tostring(Fields.DataDescription), MasterKeyGUID = tostring(Fields.MasterKeyGUID),
+              ReturnValue = tostring(Fields.ReturnValue);
+let procs = SecurityEvent
+    | where TimeGenerated > ago(lookback + 7d)
+    | where EventID == 4688
+    | project ProcTime = TimeGenerated, Computer, CallerPidHex = tolower(NewProcessId),
+              Image = tolower(NewProcessName), ParentImage = tolower(ParentProcessName), SubjectUserName;
+unprotect
+| join kind=leftouter procs on Computer, CallerPidHex
+// a 4688 after the decrypt belongs to a later process with a reused PID: keep the row, drop the match
+| extend Valid = isnotnull(ProcTime) and ProcTime <= UnprotectTime
+| extend ProcTime = iff(Valid, ProcTime, datetime(1970-01-01)),
+         Image = iff(Valid, Image, ""), ParentImage = iff(Valid, ParentImage, ""), SubjectUserName = iff(Valid, SubjectUserName, "")
+| summarize arg_max(ProcTime, Image, ParentImage, SubjectUserName) by Computer, CallerPidHex, UnprotectTime, DataDescription, MasterKeyGUID, ReturnValue
+// vendor clients decrypt their own state
+| where not(Image has_any (vendorDirs))
+| extend CallerFromUserWritablePath = Image has_any (userWritable),
+         CallerUnresolved = isempty(Image)
+| summarize FirstSeen = min(UnprotectTime), LastSeen = max(UnprotectTime), Decrypts = count(),
+            Descriptions = make_set(DataDescription, 20), MasterKeys = make_set(MasterKeyGUID, 10)
+    by Computer, Image, ParentImage, SubjectUserName, CallerFromUserWritablePath, CallerUnresolved
+// Strongest first: a caller from a user-writable path, then callers you have not baselined.
+| order by CallerFromUserWritablePath desc, Decrypts desc
